@@ -9,21 +9,38 @@ import "@chainlink/contracts/src/v0.8/Denominations.sol";
 import "./ILendingPool.sol";
 
 
-contract Seer is Ownable {
+contract Witch is Ownable {
 
     FeedRegistryInterface internal registry;
-    // uint256 public seers;
+    /**
+    @dev Stores a witch's prediction
+    @param option long or short the token. 1 - Long and 0 - Short
+    @param start When the prediction was made
+    @param end 
+    @param token The token whose price is being predicted
+    @param price The predicted price of the token
+    @param amount The predicted amount of the token
+    **/
     struct prediction {
         uint256 option;
         uint start;
         uint end;
-        address payable base;
-        address payable quote;
+        address payable token;
         int256 price;
         uint256 amount;
     }
+    /**
+    @dev Stores a witch and a list of her predictions
+    **/
     mapping(uint256 => prediction[]) public witchPredictions;
-
+    /** 
+    @dev Stores details about each follower and their stake
+    @param _witch The witch a follower is following.
+    @param ending The 
+    @param contribution The amount contributed by a follower
+    @param _stake percentage staked by a follower with respect to a witch
+    @param profit How much profit has been made by a follower
+    **/
     struct following {
         uint256 _witch;
         uint256 ending;
@@ -55,7 +72,10 @@ contract Seer is Ownable {
     constructor(address _registry){
         registry = FeedRegistryInterface(_registry);
         coven = payable(0x5180db8F5c931aaE63c74266b211F580155ecac8);
+        pool = ILendingPool(0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9);
     }
+
+    ILendingPool pool;
 
     /**
    * @dev Stakes an amount of underlying asset into a LendingPool
@@ -67,22 +87,22 @@ contract Seer is Ownable {
    **/
 
     function stakePool(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) private {
-        ILendingPool pool = ILendingPool(0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9);
+        // pool = ILendingPool(0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9);
         pool.deposit(asset, amount, onBehalfOf, referralCode);
     }
 
-    function predict(uint256 _witch, uint256 _option, uint _duration, address payable base, address payable quote, int256 price, uint256 amount) public returns (uint256){
+    function predict(uint256 _witch, uint256 _option, uint _duration, address payable token, int256 price, uint256 amount) public returns (uint256){
         IERC721 witchContract = IERC721(coven);
         require(witchContract.ownerOf(_witch) == msg.sender, "Only owner can predict");
         require(_option == 1 | 0, "Invalid option");
         require(amount >= witches[_witch].followerContribution);
 
-        prediction memory _prediction = prediction(_option, block.timestamp, block.timestamp + (_duration * 3600), base, quote, price, amount);
+        prediction memory _prediction = prediction(_option, block.timestamp, block.timestamp + (_duration * 3600), token, price, amount);
         witchPredictions[_witch].push(_prediction);
         witches[_witch].amountStaked += amount;
         totalAmountStaked += amount;
 
-        stakePool(base, amount, Ownable.owner(), 0);
+        stakePool(token, amount, Ownable.owner(), 0);
         uint80 activeStake = stake(witches[_witch].amountStaked, totalAmountStaked);
         witches[_witch]._stake = activeStake;
 
@@ -132,7 +152,6 @@ contract Seer is Ownable {
         uint256 _amount = followers[msg.sender].contribution;
 
         witches[previousLeader].followerContribution -= _amount;
-        uint256 _witchContribution = witches[previousLeader].followerContribution;
 
         totalAmountContributed -= _amount;
 
@@ -224,9 +243,9 @@ contract Seer is Ownable {
             (
                 uint80 roundId,
                 uint timeStamp
-            ) = getLatestRoundData(predictions[i].base, predictions[i].quote); 
+            ) = getLatestRoundData(predictions[i].token, Denominations.USD); 
 
-            int price = getPrice(predictions[i].end, timeStamp, roundId, predictions[i].base, predictions[i].quote);
+            int price = getPrice(predictions[i].end, timeStamp, roundId, predictions[i].token, Denominations.USD);
 
             uint _option = predictions[i].option;
 
@@ -238,12 +257,7 @@ contract Seer is Ownable {
         }
     }
 
-    function withdraw(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) private {
-        ILendingPool pool = ILendingPool(0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9);
-        pool.deposit(asset, amount, onBehalfOf, referralCode);
-    }
-
-    function expiredStake() external returns(uint256) {
+    function expiredStake() internal returns(uint256) {
         uint256 _expiredStake;
 
         uint count;
@@ -260,6 +274,25 @@ contract Seer is Ownable {
         }
 
         return _expiredStake;
+    }
+
+    function releaseExpiredStake(address asset, address to) public onlyOwner returns (uint256) {
+        // ILendingPool pool = ILendingPool(0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9);
+        address _owner = Ownable.owner();
+        (
+            uint256 totalCollateralETH,
+            uint256 totalDebtETH,
+            uint256 availableBorrowsETH,
+            uint256 currentLiquidationThreshold,
+            uint256 ltv,
+            uint256 healthFactor
+        ) = pool.getUserAccountData(_owner);
+
+        uint256 available = totalCollateralETH - totalDebtETH;
+        uint256 expired = expiredStake();
+        uint256 removeAmount = expired * available/100;
+
+        return pool.withdraw(asset, removeAmount, to);
     }
     
 }
